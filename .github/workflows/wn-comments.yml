@@ -14,6 +14,7 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -99,8 +100,12 @@ jobs:
                       time.sleep(5 + att * 3)
                   return None
 
-              # 章节列表（接口加密，用官方 Fock 库在页面内解密）
+              # 章节列表（优先用仓库缓存，否则 API+Fock 解密）
               chapters = None
+              import os.path
+              if os.path.exists('chapters.json'):
+                  chapters = json.load(open('chapters.json'))
+                  print('CHLIST_CACHE_HIT:', len(chapters), flush=True)
               for att in range(12):
                   chres = page.evaluate("""async (bookId) => {
                       try {
@@ -197,6 +202,8 @@ jobs:
 
               browser.close()
 
+          if chapters:
+              result['chapterList'] = chapters
           result['nextStart'] = result['blockedAt'] if result['blockedAt'] is not None else START + len(batch)
           with open('comments.json', 'w', encoding='utf-8') as f:
               json.dump(result, f, ensure_ascii=False)
