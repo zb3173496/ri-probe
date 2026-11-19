@@ -4,13 +4,13 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: dig sitemap for chapter urls
+      - name: extract fockPath from wayback chapter page
         run: |
-          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-          echo "--- sitemap index:"
-          curl -sL --max-time 30 -A "$UA" "https://www.webnovel.com/sitemap/sitemap.xml" -o /tmp/sm.xml -w "status: %{http_code} size: %{size_download}\n"
-          head -c 500 /tmp/sm.xml
+          curl -sL --max-time 60 "https://web.archive.org/web/2025id_/https://www.webnovel.com/book/7996858406002505/21533585005668024" -o /tmp/wb.html -w "status:%{http_code} size:%{size_download}\n"
+          echo "--- fockPath:"
+          grep -o 'fockPath[^,}]*' /tmp/wb.html | head -3
+          echo "--- g_data head:"
+          grep -o 'g_data={.\{0,600\}' /tmp/wb.html | head -c 700
           echo
-          echo "--- find book 7996858406002505 sitemap:"
-          grep -o 'https://[^<]*7996858406002505[^<]*' /tmp/sm.xml | head -5
-          grep -oE '<loc>[^<]+</loc>' /tmp/sm.xml | head -10
+          echo "--- any fock url:"
+          grep -o 'https://[^"]*fock[^"]*' /tmp/wb.html | head -5
