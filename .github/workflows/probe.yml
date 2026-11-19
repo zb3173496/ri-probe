@@ -4,22 +4,49 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: wayback reader html + bundle mining
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install playwright
         run: |
-          echo "--- wayback chapter page:"
-          curl -sL --max-time 60 "https://web.archive.org/web/2025/https://www.webnovel.com/book/7996858406002505/21533585005668024" -o /tmp/wb.html -w "wb_status: %{http_code} size: %{size_download}\n"
-          grep -o 'https://www.yueimg.com/en/js/[^"]*\.js' /tmp/wb.html | sort -u | head -30
-          echo "--- fallback: wayback book page bundles:"
-          curl -sL --max-time 60 "https://web.archive.org/web/2025/https://www.webnovel.com/book/7996858406002505" -o /tmp/wb2.html -w "wb2_status: %{http_code} size: %{size_download}\n"
-          grep -o 'https://www.yueimg.com/en/js/[^"]*\.js' /tmp/wb2.html | sort -u | head -30
-      - name: grep bundles for comment endpoints
+          pip install playwright
+          playwright install chromium --with-deps
+      - name: test go/pcm endpoints
         run: |
-          mkdir -p /tmp/js
-          for u in $(grep -ho 'https://www.yueimg.com/en/js/[^"]*\.js' /tmp/wb.html /tmp/wb2.html 2>/dev/null | sort -u); do
-            curl -sL --max-time 30 "$u" -o "/tmp/js/$(basename $u)"
-          done
-          ls /tmp/js | head
-          echo "--- comment-ish endpoints:"
-          grep -rho '"/go/[A-Za-z0-9_/\-]\+"' /tmp/js | sort -u | head -40
-          echo "--- paragraph/comment keywords:"
-          grep -rho '[A-Za-z]*[Pp]aragraph[A-Za-z]*\|[A-Za-z]*[Cc]omment[A-Za-z]*' /tmp/js | sort | uniq -c | sort -rn | head -25
+          python3 - << 'PYEOF'
+          from playwright.sync_api import sync_playwright
+          import json, time
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True,
+                  args=['--disable-blink-features=AutomationControlled'])
+              ctx = browser.new_context(
+                  user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                  viewport={'width': 1440, 'height': 900}, locale='en-US')
+              page = ctx.new_page()
+              page.goto('https://www.webnovel.com/book/7996858406002505', timeout=90000)
+              for i in range(20):
+                  time.sleep(2)
+                  if 'Reverend' in page.title():
+                      break
+              print('BOOK_TITLE:', page.title(), flush=True)
+              time.sleep(4)
+
+              def api(url):
+                  r = page.evaluate("""async (u) => {
+                      const res = await fetch(u, {headers:{'Accept':'application/json'}});
+                      const txt = await res.text();
+                      return {status: res.status, head: txt.slice(0,180)};
+                  }""", url)
+                  print('API', url.split('?')[0][-45:], '=>', r['status'], r['head'][:120].replace('\n',' '), flush=True)
+                  return r
+
+              api('https://www.webnovel.com/go/pcm/chapter/get-chapter-list?bookId=7996858406002505&pageIndex=0&encryptType=1')
+              api('https://www.webnovel.com/go/pcm/chapterReview/getReviewList?bookId=7996858406002505&chapterId=21533585005668024&lastReviewId=0&orderType=1&pageIndex=1')
+              nav = page.goto('https://www.webnovel.com/go/pcm/chapterReview/getReviewList?bookId=7996858406002505&chapterId=21533585005668024&lastReviewId=0&orderType=1&pageIndex=1', timeout=60000)
+              print('NAV_STATUS:', nav.status, flush=True)
+              time.sleep(8)
+              body = page.evaluate('() => { const p = document.querySelector("pre"); return p ? p.textContent.slice(0,250) : document.body.innerText.slice(0,120); }')
+              print('NAV_BODY:', body[:200].replace('\n',' '), flush=True)
+              browser.close()
+          PYEOF
