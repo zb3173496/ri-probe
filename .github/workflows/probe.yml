@@ -4,59 +4,22 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: install playwright
+      - name: wayback reader html + bundle mining
         run: |
-          pip install playwright
-          playwright install chromium --with-deps
-      - name: capture responses and all scripts
+          echo "--- wayback chapter page:"
+          curl -s --max-time 40 "https://web.archive.org/web/2025/https://www.webnovel.com/book/7996858406002505/21533585005668024" -o /tmp/wb.html -w "wb_status: %{http_code} size: %{size_download}\n"
+          grep -o 'https://www.yueimg.com/en/js/[^"]*\.js' /tmp/wb.html | sort -u | head -30
+          echo "--- fallback: wayback book page bundles:"
+          curl -s --max-time 40 "https://web.archive.org/web/2025/https://www.webnovel.com/book/7996858406002505" -o /tmp/wb2.html -w "wb2_status: %{http_code} size: %{size_download}\n"
+          grep -o 'https://www.yueimg.com/en/js/[^"]*\.js' /tmp/wb2.html | sort -u | head -30
+      - name: grep bundles for comment endpoints
         run: |
-          python3 - << 'PYEOF'
-          from playwright.sync_api import sync_playwright
-          import json, time, re
-
-          with sync_playwright() as p:
-              browser = p.chromium.launch(headless=True,
-                  args=['--disable-blink-features=AutomationControlled'])
-              ctx = browser.new_context(
-                  user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                  viewport={'width': 1440, 'height': 900}, locale='en-US')
-              page = ctx.new_page()
-              resps = []
-              def on_resp(r):
-                  if '/go/' in r.url or '/apiajax/' in r.url:
-                      try:
-                          resps.append({'url': r.url.split('?')[0][-60:], 'status': r.status})
-                      except Exception:
-                          pass
-              page.on('response', on_resp)
-
-              page.goto('https://www.webnovel.com/book/7996858406002505', timeout=90000)
-              for i in range(20):
-                  time.sleep(2)
-                  if 'Reverend' in page.title():
-                      break
-              print('BOOK_TITLE:', page.title(), flush=True)
-              time.sleep(8)
-              print('GO_RESPONSES:', json.dumps(resps, ensure_ascii=False), flush=True)
-
-              # 所有脚本（不限域名）
-              scripts = page.evaluate("""() => [...document.scripts].map(s => s.src).filter(Boolean)""")
-              print('ALL_SCRIPTS:', json.dumps(scripts[:20], ensure_ascii=False), flush=True)
-
-              # 每个 js 里挖 endpoint 字符串（用 fetch 拉 js 源码，cdn 脚本一般无挑战）
-              eps = set()
-              for src in scripts:
-                  if not src.endswith('.js') and '.js?' not in src:
-                      continue
-                  try:
-                      txt = page.evaluate("""async (u) => (await fetch(u)).text()""", src)
-                      for m in re.findall(r'["\'](/(?:go|apiajax)/[A-Za-z0-9_/\-]{2,80})["\']', txt):
-                          eps.add(m)
-                  except Exception:
-                      pass
-              print('ALL_ENDPOINTS:', json.dumps(sorted(eps), ensure_ascii=False), flush=True)
-              browser.close()
-          PYEOF
+          mkdir -p /tmp/js
+          for u in $(grep -ho 'https://www.yueimg.com/en/js/[^"]*\.js' /tmp/wb.html /tmp/wb2.html 2>/dev/null | sort -u); do
+            curl -s --max-time 30 "$u" -o "/tmp/js/$(basename $u)"
+          done
+          ls /tmp/js | head
+          echo "--- comment-ish endpoints:"
+          grep -rho '"/go/[A-Za-z0-9_/\-]\+"' /tmp/js | sort -u | head -40
+          echo "--- paragraph/comment keywords:"
+          grep -rho '[A-Za-z]*[Pp]aragraph[A-Za-z]*\|[A-Za-z]*[Cc]omment[A-Za-z]*' /tmp/js | sort | uniq -c | sort -rn | head -25
