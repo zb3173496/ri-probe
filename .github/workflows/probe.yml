@@ -4,54 +4,23 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: install playwright
+      - name: install warp
         run: |
-          pip install playwright -q
-          playwright install chromium --with-deps
-      - name: probe
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq cloudflare-warp 2>&1 | tail -1
+      - name: warp connect + probe api
         run: |
-          python3 - << 'PYEOF'
-          from playwright.sync_api import sync_playwright
-          import json, time
-          with sync_playwright() as p:
-              browser = p.chromium.launch(headless=True, args=[
-                  '--disable-blink-features=AutomationControlled',
-                  '--no-sandbox', '--disable-dev-shm-usage'])
-              ctx = browser.new_context(
-                  user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                  viewport={'width': 1440, 'height': 900}, locale='en-US')
-              page = ctx.new_page()
-              # 先过书籍页挑战
-              page.goto('https://www.webnovel.com/book/7996858406002505', timeout=60000)
-              for i in range(20):
-                  time.sleep(2)
-                  if 'Reverend' in page.title():
-                      break
-              print('BOOK_OK:', page.title(), flush=True)
-              # 直接导航 API，长时间等挑战自动通过
-              t0 = time.time()
-              page.goto('https://www.webnovel.com/apiajax/chapter/GetChapterList?bookId=7996858406002505', timeout=60000)
-              passed = False
-              for i in range(75):
-                  time.sleep(4)
-                  try:
-                      body = page.evaluate('() => document.body.innerText.slice(0,80)')
-                      if body and ('Just a moment' not in body) and ('security verification' not in body) and ('Verify' not in body):
-                          passed = True
-                          print('API_PASSED at', int(time.time()-t0), 's:', body[:80], flush=True)
-                          break
-                  except Exception as e:
-                      pass
-                  try:
-                      if page.frames:
-                          pass
-                  except: pass
-              if not passed:
-                  print('API_STILL_BLOCKED after', int(time.time()-t0), 's', flush=True)
-                  # 看看有没有 cf 挑战 iframe
-                  print('FRAMES:', len(page.frames), [f.url[:60] for f in page.frames], flush=True)
-              browser.close()
-          PYEOF
+          sudo warp-cli --accept-tos registration new
+          sudo warp-cli --accept-tos mode proxy
+          sudo warp-cli --accept-tos proxy port 40000
+          sudo warp-cli --accept-tos connect
+          sleep 5
+          sudo warp-cli --accept-tos status
+          echo "--- exit ip:"
+          curl -s -x socks5h://127.0.0.1:40000 --max-time 20 https://cloudflare.com/cdn-cgi/trace | head -6
+          echo "--- book page via warp:"
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+          curl -s -x socks5h://127.0.0.1:40000 --max-time 30 -c /tmp/ck.txt -A "$UA" -o /dev/null -w "book: %{http_code}\n" "https://www.webnovel.com/book/7996858406002505"
+          echo "--- api via warp:"
+          curl -s -x socks5h://127.0.0.1:40000 --max-time 30 -b /tmp/ck.txt -A "$UA" -H "Accept: application/json" -H "Referer: https://www.webnovel.com/book/7996858406002505" -w "\napi_status: %{http_code}\n" "https://www.webnovel.com/apiajax/chapter/GetChapterList?bookId=7996858406002505" | head -c 500
