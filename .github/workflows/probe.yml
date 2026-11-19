@@ -4,28 +4,39 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: probe webnovel
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install playwright
         run: |
-          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-          BID=7996858406002505
-          CID=42481155747927422
-          curl -s -c ck.txt -A "$UA" "https://www.webnovel.com/book/$BID" -o /dev/null -w "bookpage: %{http_code}\n"
-          TOKEN=$(grep "_csrfToken" ck.txt | awk '{print $7}')
-          echo "csrf: ${TOKEN:0:12}"
-          echo "== GetChapterList =="
-          curl -s -b ck.txt -A "$UA" "https://www.webnovel.com/apiajax/chapter/GetChapterList?_csrfToken=$TOKEN&bookId=$BID" | head -c 400; echo
-          echo "== GetChapterReviewsAjax =="
-          curl -s -b ck.txt -A "$UA" "https://www.webnovel.com/apiajax/ChapterReview/GetChapterReviewsAjax?_csrfToken=$TOKEN&bookId=$BID&chapterId=$CID&pageIndex=1&orderBy=1" | head -c 400; echo
-          echo "== 段评接口候选 =="
-          for ep in \
-            "ParagraphReview/GetParagraphReviewsAjax" \
-            "ParagraphReview/GetParagraphReviewList" \
-            "chapter/GetParagraphReviewsAjax" \
-            "ChapterReview/GetParagraphReviewsAjax" \
-            "comment/GetParagraphComments" \
-            "ParagraphComment/GetParagraphCommentsAjax" \
-            "book/GetParagraphReviewsAjax" \
-            ; do
-            R=$(curl -s -b ck.txt -A "$UA" "https://www.webnovel.com/apiajax/$ep?_csrfToken=$TOKEN&bookId=$BID&chapterId=$CID&paragraphId=1&pageIndex=1&orderBy=1" | head -c 120)
-            echo "$ep => $R"
-          done
+          pip install playwright -q
+          playwright install chromium --with-deps -q 2>&1 | tail -1
+      - name: probe
+        run: |
+          python3 - << 'PYEOF'
+          from playwright.sync_api import sync_playwright
+          import json, time
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
+              ctx = browser.new_context(
+                  user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                  viewport={'width': 1440, 'height': 900}, locale='en-US')
+              page = ctx.new_page()
+              page.goto('https://www.webnovel.com/book/7996858406002505', timeout=60000)
+              for i in range(10):
+                  time.sleep(3)
+                  t = page.title()
+                  if 'Just a moment' not in t and t:
+                      break
+              print('TITLE:', t)
+              if 'Reverend' in t or 'Insanity' in t:
+                  print('PASSED_CHALLENGE')
+                  r = page.evaluate("""async () => {
+                    const csrf = (document.cookie.split(';').find(e=>e.includes('_csrfToken'))||'').split('=')[1]||'';
+                    const res = await fetch('/apiajax/chapter/GetChapterList?_csrfToken='+csrf+'&bookId=7996858406002505');
+                    const j = await res.json();
+                    return {code: j.code, chapters: j.data ? (j.data.chapterItems||j.data.chapters||[]).length : -1, keys: j.data ? Object.keys(j.data) : []};
+                  }""")
+                  print('API:', json.dumps(r))
+              browser.close()
+          PYEOF
