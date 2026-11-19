@@ -11,45 +11,13 @@ jobs:
         run: |
           pip install playwright
           playwright install chromium --with-deps
-      - name: turnstile json test
+      - name: raw response dump
         run: |
           python3 - << 'PYEOF'
           from playwright.sync_api import sync_playwright
           import json, time
 
           API = 'https://www.webnovel.com/apiajax/chapter/GetChapterList?bookId=7996858406002505'
-
-          def body_state(page):
-              try:
-                  pre = page.evaluate('() => { const p = document.querySelector("pre"); return p ? p.textContent.slice(0,300) : null; }')
-                  if pre:
-                      return pre
-                  return page.evaluate('() => document.body ? document.body.innerText.slice(0,80) : ""')
-              except Exception as e:
-                  return 'ERR ' + str(e)[:80]
-
-          def click_turnstile(page):
-              for i in range(20):
-                  time.sleep(3)
-                  body = body_state(page)
-                  if body and 'Just a moment' not in body and 'security verification' not in body and 'Verify you are' not in body:
-                      return body
-                  for f in page.frames:
-                      if 'challenges.cloudflare.com' in f.url:
-                          try:
-                              box = f.frame_element().bounding_box()
-                              if box:
-                                  x = box['x'] + min(30, box['width']/5)
-                                  y = box['y'] + box['height']/2
-                                  page.mouse.move(x + 40, y, steps=8)
-                                  time.sleep(0.3)
-                                  page.mouse.move(x, y, steps=6)
-                                  page.mouse.down(); time.sleep(0.08); page.mouse.up()
-                                  print('CLICKED turnstile', flush=True)
-                                  time.sleep(4)
-                          except Exception as e:
-                              pass
-              return body_state(page)
 
           with sync_playwright() as p:
               browser = p.chromium.launch(headless=True,
@@ -58,22 +26,29 @@ jobs:
                   user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
                   viewport={'width': 1440, 'height': 900}, locale='en-US')
               page = ctx.new_page()
-              page.goto(API, timeout=90000)
+              resp = page.goto(API, timeout=90000)
+              print('STATUS:', resp.status, flush=True)
+              print('HEADERS_CT:', resp.headers.get('content-type'), flush=True)
               time.sleep(6)
-              result = click_turnstile(page)
-              print('CHLIST_BODY:', repr(result[:150]), flush=True)
-              if result and result.strip().startswith('{'):
-                  print('CHLIST_JSON_OK', flush=True)
-                  page.goto('https://www.webnovel.com/apiajax/ChapterReview/GetChapterReviewsAjax?bookId=7996858406002505&chapterId=42481155747927422&pageIndex=1&orderBy=1', timeout=60000)
-                  time.sleep(4)
-                  pre2 = body_state(page)
-                  print('REVIEW_BODY:', pre2[:200], flush=True)
-                  r3 = page.evaluate("""async () => {
-                    const res = await fetch('/apiajax/chapter/GetChapterList?bookId=7996858406002505', {headers:{'Accept':'application/json'}});
-                    const txt = await res.text();
-                    let j=null; try{j=JSON.parse(txt)}catch(e){}
-                    return {status: res.status, isJson: !!j, head: txt.slice(0,120)};
-                  }""")
-                  print('FETCH_AFTER:', json.dumps(r3, ensure_ascii=False)[:200], flush=True)
+              body = page.evaluate('() => document.body ? document.body.innerText.slice(0,80) : ""')
+              # 等待挑战完成（点击 turnstile）
+              for i in range(15):
+                  if 'Just a moment' not in body and 'security verification' not in body and 'Verify you are' not in body:
+                      break
+                  for f in page.frames:
+                      if 'challenges.cloudflare.com' in f.url:
+                          try:
+                              box = f.frame_element().bounding_box()
+                              if box:
+                                  page.mouse.click(box['x'] + 30, box['y'] + box['height']/2)
+                                  time.sleep(4)
+                          except Exception:
+                              pass
+                  time.sleep(3)
+                  body = page.evaluate('() => document.body ? document.body.innerText.slice(0,80) : ""')
+              html = page.content()
+              print('FINAL_URL:', page.url, flush=True)
+              print('HTML_LEN:', len(html), flush=True)
+              print('HTML_HEAD:', html[:400].replace(chr(10), ' ')[:400], flush=True)
               browser.close()
           PYEOF
