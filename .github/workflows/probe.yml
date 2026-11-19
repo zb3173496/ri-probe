@@ -28,25 +28,12 @@ jobs:
                   t = page.title()
                   if 'Just a moment' not in t and t:
                       break
-              print('TITLE:', t)
-              r = page.evaluate("""async () => {
-                const csrf = (document.cookie.split(';').find(e=>e.includes('_csrfToken'))||'').split('=')[1]||'';
-                const out = {csrfLen: csrf.length, results: {}};
-                const bids = ['7996858406002505'];
-                const urls = {
-                  chlist1: '/apiajax/chapter/GetChapterList?_csrfToken='+csrf+'&bookId=7996858406002505',
-                  chlist2: '/apiajax/chapter/GetChapterList?bookId=7996858406002505&_csrfToken='+csrf+'&_='+Date.now(),
-                  review1: '/apiajax/ChapterReview/GetChapterReviewsAjax?_csrfToken='+csrf+'&bookId=7996858406002505&chapterId=42481155747927422&pageIndex=1&orderBy=1&_='+Date.now(),
-                };
-                for (const [k,u] of Object.entries(urls)) {
-                  try {
-                    const res = await fetch(u, {headers:{'Accept':'application/json'}});
-                    const txt = await res.text();
-                    out.results[k] = {status: res.status, head: txt.slice(0,120)};
-                  } catch(e) { out.results[k] = {err: String(e).slice(0,100)}; }
-                }
-                return out;
-              }""")
-              print(json.dumps(r, ensure_ascii=False, indent=1))
+              print('TITLE:', t, flush=True)
+              time.sleep(5)
+              # 直接导航到 API
+              r = page.goto('https://www.webnovel.com/apiajax/chapter/GetChapterList?bookId=7996858406002505', timeout=30000)
+              body = page.evaluate('() => document.body.innerText')
+              print('NAV_STATUS:', r.status, flush=True)
+              print('BODY_HEAD:', body[:300], flush=True)
               browser.close()
           PYEOF
