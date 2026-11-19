@@ -11,12 +11,11 @@ jobs:
         run: |
           pip install playwright
           playwright install chromium --with-deps
-      - name: catalog modal + review fields
+      - name: chapter list plaintext check
         run: |
           python3 - << 'PYEOF'
           from playwright.sync_api import sync_playwright
           import json, time
-
           with sync_playwright() as p:
               browser = p.chromium.launch(headless=True,
                   args=['--disable-blink-features=AutomationControlled'])
@@ -25,28 +24,24 @@ jobs:
                   viewport={'width': 1440, 'height': 900}, locale='en-US')
               page = ctx.new_page()
               page.goto('https://www.webnovel.com/book/7996858406002505', timeout=90000)
-              for i in range(25):
-                  time.sleep(2)
-                  if 'Reverend' in page.title():
-                      break
-              print('BOOK_TITLE:', page.title(), flush=True)
-              time.sleep(5)
-
-              # 1) 章评完整字段
-              for att in range(3):
+              time.sleep(8)
+              # 直接打章节列表接口（不依赖页面挑战通过）
+              for att in range(5):
                   r = page.evaluate("""async () => {
-                      const res = await fetch('/go/pcm/chapterReview/getReviewList?bookId=7996858406002505&chapterId=21533585005668024&lastReviewId=0&orderType=1&pageIndex=1', {headers:{'Accept':'application/json'}});
+                      const res = await fetch('https://www.webnovel.com/go/pcm/chapter/get-chapter-list?bookId=7996858406002505&pageIndex=0&encryptType=1', {headers:{'Accept':'application/json'}});
                       const txt = await res.text();
                       let j=null; try{j=JSON.parse(txt)}catch(e){}
-                      return {status: res.status, item: j && j.data && j.data.chapterReviewItems ? j.data.chapterReviewItems[0] : null};
+                      if (!j) return {status: res.status, head: txt.slice(0,80)};
+                      const d = j.data || {};
+                      return {status: res.status,
+                              keys: Object.keys(d),
+                              total: d.chapterTotal,
+                              firstItems: d.chapterItems ? d.chapterItems.slice(0,3) : null};
                   }""")
-                  if r['item']:
+                  if r.get('firstItems'):
                       break
-                  time.sleep(5)
-              print('REVIEW_ITEM:', json.dumps(r, ensure_ascii=False)[:900], flush=True)
-
-              # 2) 目录弹窗抓章节ID
-              links = page.evaluate("""() => [...document.querySelectorAll('a[href*="/book/7996858406002505/"]')].map(a => a.getAttribute('href'))""")
-              print('TOC_LINKS_ON_PAGE:', len(links), links[:4], flush=True)
+                  print('ATT', att, 'fail:', r.get('status'), r.get('head','')[:60], flush=True)
+                  time.sleep(6)
+              print('CHLIST_STRUCT:', json.dumps(r, ensure_ascii=False)[:900], flush=True)
               browser.close()
           PYEOF
