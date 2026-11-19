@@ -17,6 +17,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-chromium-v1
       - name: install playwright
         run: |
           pip install playwright
@@ -97,7 +101,7 @@ jobs:
 
               # 章节列表（接口加密，用官方 Fock 库在页面内解密）
               chapters = None
-              for att in range(4):
+              for att in range(12):
                   chres = page.evaluate("""async (bookId) => {
                       try {
                           if (!window.Fock) {
@@ -132,8 +136,17 @@ jobs:
                   if chres and 'err' not in chres:
                       break
                   print('CHLIST_ATT', att, chres, flush=True)
+                  for f in page.frames:
+                      if 'challenges.cloudflare.com' in f.url:
+                          try:
+                              box = f.frame_element().bounding_box()
+                              if box:
+                                  page.mouse.click(box['x'] + 30, box['y'] + box['height']/2)
+                                  time.sleep(4)
+                          except Exception:
+                              pass
                   warmup()
-                  time.sleep(5 + att * 3)
+                  time.sleep(5 + att)
               if chres and 'err' not in chres:
                   vols = chres.get('volumeItems') or []
                   chapters = []
