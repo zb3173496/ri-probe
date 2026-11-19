@@ -18,10 +18,18 @@ jobs:
           playwright install chromium --with-deps
       - name: warp + playwright api test
         run: |
-          sudo warp-cli --accept-tos connect || true
-          sleep 5
-          sudo warp-cli --accept-tos status
-          curl -s -x socks5h://127.0.0.1:40000 --max-time 15 https://cloudflare.com/cdn-cgi/trace | head -3
+          for i in 1 2 3; do
+            sudo warp-cli --accept-tos registration new 2>&1 | tail -1
+            sudo warp-cli --accept-tos mode proxy 2>&1 | tail -1
+            sudo warp-cli --accept-tos proxy port 40000 2>&1 | tail -1
+            sudo warp-cli --accept-tos connect 2>&1 | tail -1
+            sleep 6
+            ST=$(sudo warp-cli --accept-tos status 2>&1)
+            echo "STATUS: $ST"
+            echo "$ST" | grep -q Connected && break
+            sleep 5
+          done
+          curl -s -x socks5h://127.0.0.1:40000 --max-time 15 https://cloudflare.com/cdn-cgi/trace | grep -E "ip=|loc="
           python3 - << 'PYEOF'
           from playwright.sync_api import sync_playwright
           import json, time
