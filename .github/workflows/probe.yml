@@ -4,7 +4,9 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: wayback catalog hunt
+      - name: cdx v2
         run: |
-          echo "--- CDX: catalog pages"
-          curl -sL --max-time 40 "http://web.archive.org/cdx/search/cdx?url=webnovel.com/book/7996858406002505*&output=text&limit=40&collapse=urlkey" | head -40
+          echo "--- exact host prefix:"
+          curl -sL --max-time 60 "http://web.archive.org/cdx/search/cdx?url=www.webnovel.com/book/7996858406002505&matchType=prefix&output=text&limit=50&collapse=urlkey" | head -50
+          echo "--- catalog exact:"
+          curl -sL --max-time 40 "http://web.archive.org/cdx/search/cdx?url=www.webnovel.com/book/7996858406002505/catalog&output=text&limit=10" | head -10
