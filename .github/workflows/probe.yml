@@ -4,6 +4,14 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
+      - name: sitemap check
+        run: |
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+          echo "--- sitemap.xml:"
+          curl -s --max-time 25 -A "$UA" "https://www.webnovel.com/sitemap.xml" | head -c 800
+          echo
+          echo "--- robots.txt:"
+          curl -s --max-time 25 -A "$UA" "https://www.webnovel.com/robots.txt" | head -c 800
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -11,7 +19,7 @@ jobs:
         run: |
           pip install playwright
           playwright install chromium --with-deps
-      - name: chapter list plaintext check
+      - name: getContent chain test
         run: |
           python3 - << 'PYEOF'
           from playwright.sync_api import sync_playwright
@@ -24,24 +32,22 @@ jobs:
                   viewport={'width': 1440, 'height': 900}, locale='en-US')
               page = ctx.new_page()
               page.goto('https://www.webnovel.com/book/7996858406002505', timeout=90000)
-              time.sleep(8)
-              # 直接打章节列表接口（不依赖页面挑战通过）
-              for att in range(5):
+              time.sleep(6)
+              for att in range(4):
                   r = page.evaluate("""async () => {
-                      const res = await fetch('https://www.webnovel.com/go/pcm/chapter/get-chapter-list?bookId=7996858406002505&pageIndex=0&encryptType=1', {headers:{'Accept':'application/json'}});
+                      const res = await fetch('https://www.webnovel.com/go/pcm/chapter/getContent?bookId=7996858406002505&chapterId=21533585005668024&encryptType=3&font=Merriweather', {headers:{'Accept':'application/json'}});
                       const txt = await res.text();
                       let j=null; try{j=JSON.parse(txt)}catch(e){}
                       if (!j) return {status: res.status, head: txt.slice(0,80)};
                       const d = j.data || {};
-                      return {status: res.status,
-                              keys: Object.keys(d),
-                              total: d.chapterTotal,
-                              firstItems: d.chapterItems ? d.chapterItems.slice(0,3) : null};
+                      const ci = d.chapterInfo || d;
+                      return {status: res.status, keys: Object.keys(ci),
+                              sample: {id: ci.chapterId, name: ci.chapterName, prev: ci.preChapterId, next: ci.nextChapterId}};
                   }""")
-                  if r.get('firstItems'):
+                  if r.get('keys'):
                       break
-                  print('ATT', att, 'fail:', r.get('status'), r.get('head','')[:60], flush=True)
-                  time.sleep(6)
-              print('CHLIST_STRUCT:', json.dumps(r, ensure_ascii=False)[:900], flush=True)
+                  print('ATT', att, r.get('status'), r.get('head','')[:50], flush=True)
+                  time.sleep(8)
+              print('GETCONTENT:', json.dumps(r, ensure_ascii=False)[:500], flush=True)
               browser.close()
           PYEOF
