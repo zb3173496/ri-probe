@@ -4,14 +4,6 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: plain curl test
-        run: |
-          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-          echo "--- curl getReviewList:"
-          curl -s --max-time 25 -A "$UA" -H "Accept: application/json" -H "Referer: https://www.webnovel.com/book/7996858406002505" -w "STATUS:%{http_code}" "https://www.webnovel.com/go/pcm/chapterReview/getReviewList?bookId=7996858406002505&chapterId=21533585005668024&lastReviewId=0&orderType=1&pageIndex=1" | head -c 400
-          echo
-          echo "--- curl get-chapter-list:"
-          curl -s --max-time 25 -A "$UA" -H "Accept: application/json" -H "Referer: https://www.webnovel.com/book/7996858406002505" -w "STATUS:%{http_code}" "https://www.webnovel.com/go/pcm/chapter/get-chapter-list?bookId=7996858406002505&pageIndex=0&encryptType=1" | head -c 300
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -19,11 +11,12 @@ jobs:
         run: |
           pip install playwright
           playwright install chromium --with-deps
-      - name: chapter list structure
+      - name: catalog modal + review fields
         run: |
           python3 - << 'PYEOF'
           from playwright.sync_api import sync_playwright
           import json, time
+
           with sync_playwright() as p:
               browser = p.chromium.launch(headless=True,
                   args=['--disable-blink-features=AutomationControlled'])
@@ -32,17 +25,28 @@ jobs:
                   viewport={'width': 1440, 'height': 900}, locale='en-US')
               page = ctx.new_page()
               page.goto('https://www.webnovel.com/book/7996858406002505', timeout=90000)
-              for i in range(20):
+              for i in range(25):
                   time.sleep(2)
                   if 'Reverend' in page.title():
                       break
               print('BOOK_TITLE:', page.title(), flush=True)
-              time.sleep(4)
-              r2 = page.evaluate("""async () => {
-                  const res = await fetch('https://www.webnovel.com/go/pcm/chapter/get-chapter-list?bookId=7996858406002505&pageIndex=0&encryptType=1', {headers:{'Accept':'application/json'}});
-                  const j = await res.json();
-                  return {keys: Object.keys(j.data||{}), itemKeys: j.data && j.data.chapterItems ? Object.keys(j.data.chapterItems[0]||{}) : [], first: j.data && j.data.chapterItems ? j.data.chapterItems[0] : null, total: j.data ? j.data.chapterTotal : null};
-              }""")
-              print('CHLIST_STRUCT:', json.dumps(r2, ensure_ascii=False)[:700], flush=True)
+              time.sleep(5)
+
+              # 1) 章评完整字段
+              for att in range(3):
+                  r = page.evaluate("""async () => {
+                      const res = await fetch('/go/pcm/chapterReview/getReviewList?bookId=7996858406002505&chapterId=21533585005668024&lastReviewId=0&orderType=1&pageIndex=1', {headers:{'Accept':'application/json'}});
+                      const txt = await res.text();
+                      let j=null; try{j=JSON.parse(txt)}catch(e){}
+                      return {status: res.status, item: j && j.data && j.data.chapterReviewItems ? j.data.chapterReviewItems[0] : null};
+                  }""")
+                  if r['item']:
+                      break
+                  time.sleep(5)
+              print('REVIEW_ITEM:', json.dumps(r, ensure_ascii=False)[:900], flush=True)
+
+              # 2) 目录弹窗抓章节ID
+              links = page.evaluate("""() => [...document.querySelectorAll('a[href*="/book/7996858406002505/"]')].map(a => a.getAttribute('href'))""")
+              print('TOC_LINKS_ON_PAGE:', len(links), links[:4], flush=True)
               browser.close()
           PYEOF
