@@ -4,50 +4,13 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: sitemap check
+      - name: dig sitemap for chapter urls
         run: |
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-          echo "--- sitemap.xml:"
-          curl -s --max-time 25 -A "$UA" "https://www.webnovel.com/sitemap.xml" | head -c 800
+          echo "--- sitemap index:"
+          curl -sL --max-time 30 -A "$UA" "https://www.webnovel.com/sitemap/sitemap.xml" -o /tmp/sm.xml -w "status: %{http_code} size: %{size_download}\n"
+          head -c 500 /tmp/sm.xml
           echo
-          echo "--- robots.txt:"
-          curl -s --max-time 25 -A "$UA" "https://www.webnovel.com/robots.txt" | head -c 800
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: install playwright
-        run: |
-          pip install playwright
-          playwright install chromium --with-deps
-      - name: getContent chain test
-        run: |
-          python3 - << 'PYEOF'
-          from playwright.sync_api import sync_playwright
-          import json, time
-          with sync_playwright() as p:
-              browser = p.chromium.launch(headless=True,
-                  args=['--disable-blink-features=AutomationControlled'])
-              ctx = browser.new_context(
-                  user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                  viewport={'width': 1440, 'height': 900}, locale='en-US')
-              page = ctx.new_page()
-              page.goto('https://www.webnovel.com/book/7996858406002505', timeout=90000)
-              time.sleep(6)
-              for att in range(4):
-                  r = page.evaluate("""async () => {
-                      const res = await fetch('https://www.webnovel.com/go/pcm/chapter/getContent?bookId=7996858406002505&chapterId=21533585005668024&encryptType=3&font=Merriweather', {headers:{'Accept':'application/json'}});
-                      const txt = await res.text();
-                      let j=null; try{j=JSON.parse(txt)}catch(e){}
-                      if (!j) return {status: res.status, head: txt.slice(0,80)};
-                      const d = j.data || {};
-                      const ci = d.chapterInfo || d;
-                      return {status: res.status, keys: Object.keys(ci),
-                              sample: {id: ci.chapterId, name: ci.chapterName, prev: ci.preChapterId, next: ci.nextChapterId}};
-                  }""")
-                  if r.get('keys'):
-                      break
-                  print('ATT', att, r.get('status'), r.get('head','')[:50], flush=True)
-                  time.sleep(8)
-              print('GETCONTENT:', json.dumps(r, ensure_ascii=False)[:500], flush=True)
-              browser.close()
-          PYEOF
+          echo "--- find book 7996858406002505 sitemap:"
+          grep -o 'https://[^<]*7996858406002505[^<]*' /tmp/sm.xml | head -5
+          grep -oE '<loc>[^<]+</loc>' /tmp/sm.xml | head -10
