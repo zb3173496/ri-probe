@@ -16,70 +16,72 @@ jobs:
         run: |
           pip install playwright
           playwright install chromium --with-deps
-      - name: warp + playwright api test
+      - name: turnstile click test
         run: |
-          for i in 1 2 3; do
-            sudo warp-cli --accept-tos registration new 2>&1 | tail -1
-            sudo warp-cli --accept-tos mode proxy 2>&1 | tail -1
-            sudo warp-cli --accept-tos proxy port 40000 2>&1 | tail -1
-            sudo warp-cli --accept-tos connect 2>&1 | tail -1
-            sleep 6
-            ST=$(sudo warp-cli --accept-tos status 2>&1)
-            echo "STATUS: $ST"
-            echo "$ST" | grep -q Connected && break
-            sleep 5
-          done
-          curl -s -x socks5h://127.0.0.1:40000 --max-time 15 https://cloudflare.com/cdn-cgi/trace | grep -E "ip=|loc="
+          sudo warp-cli --accept-tos registration new 2>&1 | tail -1
+          sudo warp-cli --accept-tos mode proxy 2>&1 | tail -1
+          sudo warp-cli --accept-tos proxy port 40000 2>&1 | tail -1
+          sudo warp-cli --accept-tos connect 2>&1 | tail -1
+          sleep 6
+          sudo warp-cli --accept-tos status
           python3 - << 'PYEOF'
           from playwright.sync_api import sync_playwright
           import json, time
-          with sync_playwright() as p:
-              browser = p.chromium.launch(headless=True,
-                  proxy={'server': 'socks5://127.0.0.1:40000'},
-                  args=['--disable-blink-features=AutomationControlled'])
-              ctx = browser.new_context(
-                  user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                  viewport={'width': 1440, 'height': 900}, locale='en-US')
-              page = ctx.new_page()
-              page.goto('https://www.webnovel.com/book/7996858406002505', timeout=90000)
-              for i in range(30):
-                  time.sleep(2)
-                  if 'Reverend' in page.title():
-                      break
-              print('BOOK_TITLE:', page.title(), flush=True)
-              if 'Reverend' in page.title():
-                  time.sleep(3)
-                  r = page.evaluate("""async () => {
-                    const out = {};
-                    const urls = {
-                      chlist: '/apiajax/chapter/GetChapterList?bookId=7996858406002505',
-                      review: '/apiajax/ChapterReview/GetChapterReviewsAjax?bookId=7996858406002505&chapterId=42481155747927422&pageIndex=1&orderBy=1',
-                    };
-                    for (const [k,u] of Object.entries(urls)) {
-                      try {
-                        const res = await fetch(u, {headers:{'Accept':'application/json'}});
-                        const txt = await res.text();
-                        let j=null; try{j=JSON.parse(txt)}catch(e){}
-                        out[k] = {status: res.status, isJson: !!j, head: txt.slice(0,200)};
-                        if (j) out[k].jsonHead = JSON.stringify(j).slice(0,400);
-                      } catch(e) { out[k] = {err: String(e).slice(0,100)}; }
-                    }
-                    return out;
-                  }""")
-                  print('API_RESULT:', json.dumps(r, ensure_ascii=False), flush=True)
-              browser.close()
-          PYEOF
 
-          sudo warp-cli --accept-tos registration new
-          sudo warp-cli --accept-tos mode proxy
-          sudo warp-cli --accept-tos proxy port 40000
-          sudo warp-cli --accept-tos connect
-          sleep 5
-          sudo warp-cli --accept-tos status
-          echo "--- exit ip:"
-          curl -s -x socks5h://127.0.0.1:40000 --max-time 20 https://cloudflare.com/cdn-cgi/trace | head -6
-          echo "--- book page via warp:"
-          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-          curl -s -x socks5h://127.0.0.1:40000 --max-time 30 -c /tmp/ck.txt -A "$UA" -o /dev/null -w "book: %{http_code}\n" "https://www.webnovel.com/book/7996858406002505"
-          echo "--- api via warp:"
-          curl -s -x socks5h://127.0.0.1:40000 --max-time 30 -b /tmp/ck.txt -A "$UA" -H "Accept: application/json" -H "Referer: https://www.webnovel.com/book/7996858406002505" -w "\napi_status: %{http_code}\n" "https://www.webnovel.com/apiajax/chapter/GetChapterList?bookId=7996858406002505" | head -c 500
+          API = 'https://www.webnovel.com/apiajax/chapter/GetChapterList?bookId=7996858406002505'
+
+          def click_turnstile(page):
+              """尝试点击 Cloudflare Turnstile 复选框"""
+              for i in range(20):
+                  time.sleep(3)
+                  try:
+                      body = page.evaluate('() => document.body ? document.body.innerText.slice(0,60) : ""')
+                      if body and 'Just a moment' not in body and 'security verification' not in body:
+                          return body
+                  except Exception:
+                      pass
+                  for f in page.frames:
+                      if 'challenges.cloudflare.com' in f.url:
+                          try:
+                              box = f.frame_element().bounding_box()
+                              if box:
+                                  x = box['x'] + min(30, box['width']/5)
+                                  y = box['y'] + box['height']/2
+                                  page.mouse.move(x + 40, y, steps=8)
+                                  time.sleep(0.3)
+                                  page.mouse.move(x, y, steps=6)
+                                  page.mouse.down(); time.sleep(0.08); page.mouse.up()
+                                  print('CLICKED turnstile at', int(x), int(y), flush=True)
+                                  time.sleep(4)
+                          except Exception as e:
+                              print('click err:', str(e)[:80], flush=True)
+              try:
+                  return page.evaluate('() => document.body ? document.body.innerText.slice(0,60) : ""')
+              except Exception as e:
+                  return 'ERR ' + str(e)[:80]
+
+          for label, proxy in [('WARP', {'server': 'socks5://127.0.0.1:40000'}), ('DIRECT', None)]:
+              print('=== TEST', label, flush=True)
+              try:
+                  with sync_playwright() as p:
+                      browser = p.chromium.launch(headless=True, proxy=proxy,
+                          args=['--disable-blink-features=AutomationControlled'])
+                      ctx = browser.new_context(
+                          user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                          viewport={'width': 1440, 'height': 900}, locale='en-US')
+                      page = ctx.new_page()
+                      page.goto(API, timeout=90000)
+                      time.sleep(6)
+                      result = click_turnstile(page)
+                      print(label, 'BODY:', repr(result[:60]) if result else None, flush=True)
+                      if result and result.strip().startswith('{'):
+                          print(label, 'JSON_OK', flush=True)
+                          # 再测一个 review 接口
+                          r = page.goto('https://www.webnovel.com/apiajax/ChapterReview/GetChapterReviewsAjax?bookId=7996858406002505&chapterId=42481155747927422&pageIndex=1&orderBy=1', timeout=60000)
+                          time.sleep(3)
+                          body2 = page.evaluate('() => document.body.innerText.slice(0,200)')
+                          print(label, 'REVIEW:', body2[:150], flush=True)
+                      browser.close()
+              except Exception as e:
+                  print(label, 'FAIL:', str(e)[:150], flush=True)
+          PYEOF
