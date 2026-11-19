@@ -7,16 +7,16 @@ jobs:
       - name: wayback reader html + bundle mining
         run: |
           echo "--- wayback chapter page:"
-          curl -s --max-time 40 "https://web.archive.org/web/2025/https://www.webnovel.com/book/7996858406002505/21533585005668024" -o /tmp/wb.html -w "wb_status: %{http_code} size: %{size_download}\n"
+          curl -sL --max-time 60 "https://web.archive.org/web/2025/https://www.webnovel.com/book/7996858406002505/21533585005668024" -o /tmp/wb.html -w "wb_status: %{http_code} size: %{size_download}\n"
           grep -o 'https://www.yueimg.com/en/js/[^"]*\.js' /tmp/wb.html | sort -u | head -30
           echo "--- fallback: wayback book page bundles:"
-          curl -s --max-time 40 "https://web.archive.org/web/2025/https://www.webnovel.com/book/7996858406002505" -o /tmp/wb2.html -w "wb2_status: %{http_code} size: %{size_download}\n"
+          curl -sL --max-time 60 "https://web.archive.org/web/2025/https://www.webnovel.com/book/7996858406002505" -o /tmp/wb2.html -w "wb2_status: %{http_code} size: %{size_download}\n"
           grep -o 'https://www.yueimg.com/en/js/[^"]*\.js' /tmp/wb2.html | sort -u | head -30
       - name: grep bundles for comment endpoints
         run: |
           mkdir -p /tmp/js
           for u in $(grep -ho 'https://www.yueimg.com/en/js/[^"]*\.js' /tmp/wb.html /tmp/wb2.html 2>/dev/null | sort -u); do
-            curl -s --max-time 30 "$u" -o "/tmp/js/$(basename $u)"
+            curl -sL --max-time 30 "$u" -o "/tmp/js/$(basename $u)"
           done
           ls /tmp/js | head
           echo "--- comment-ish endpoints:"
