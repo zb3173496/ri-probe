@@ -4,13 +4,46 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: extract fockPath from wayback chapter page
+      - name: jina reader test
         run: |
-          curl -sL --max-time 60 "https://web.archive.org/web/2025/https://www.webnovel.com/book/7996858406002505/21533585005668024" -o /tmp/wb.html -w "status:%{http_code} size:%{size_download}\n"
-          echo "--- fockPath:"
-          grep -o 'fockPath[^,}]*' /tmp/wb.html | head -3
-          echo "--- g_data head:"
-          grep -o 'g_data={.\{0,600\}' /tmp/wb.html | head -c 700
-          echo
-          echo "--- any fock url:"
-          grep -o 'https://[^"]*fock[^"]*' /tmp/wb.html | head -5
+          echo "--- r.jina.ai book page:"
+          curl -sL --max-time 60 "https://r.jina.ai/https://www.webnovel.com/book/7996858406002505" -o /tmp/jina.txt -w "status:%{http_code} size:%{size_download}\n"
+          grep -oE "/book/7996858406002505/[0-9]+" /tmp/jina.txt | sort -u | head -10
+          grep -c "book/7996858406002505" /tmp/jina.txt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install playwright
+        run: |
+          pip install playwright
+          playwright install chromium --with-deps
+      - name: encryptType variants
+        run: |
+          python3 - << 'PYEOF'
+          from playwright.sync_api import sync_playwright
+          import json, time
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True,
+                  args=['--disable-blink-features=AutomationControlled'])
+              ctx = browser.new_context(
+                  user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                  viewport={'width': 1440, 'height': 900}, locale='en-US')
+              page = ctx.new_page()
+              page.goto('https://www.webnovel.com/book/7996858406002505', timeout=90000)
+              time.sleep(6)
+              for et in ['0', '2', '']:
+                  url = 'https://www.webnovel.com/go/pcm/chapter/get-chapter-list?bookId=7996858406002505&pageIndex=0' + ('&encryptType=' + et if et else '')
+                  r = page.evaluate("""async (u) => {
+                      const res = await fetch(u, {headers:{'Accept':'application/json'}});
+                      const txt = await res.text();
+                      let j=null; try{j=JSON.parse(txt)}catch(e){}
+                      if (!j) return {status: res.status, head: txt.slice(0,60)};
+                      const d = j.data || {};
+                      return {status: res.status, code: j.code, keys: Object.keys(d).slice(0,10),
+                              vols: (d.volumeItems||[]).length,
+                              sample: d.volumeItems && d.volumeItems[0] && d.volumeItems[0].chapters ? JSON.stringify(d.volumeItems[0].chapters[0]).slice(0,200) : null};
+                  }""", url)
+                  print('ET', et or 'none', ':', json.dumps(r, ensure_ascii=False)[:400], flush=True)
+                  time.sleep(3)
+              browser.close()
+          PYEOF
