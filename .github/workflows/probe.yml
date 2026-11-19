@@ -11,13 +11,11 @@ jobs:
         run: |
           pip install playwright
           playwright install chromium --with-deps
-      - name: raw response dump
+      - name: capture real api endpoints
         run: |
           python3 - << 'PYEOF'
           from playwright.sync_api import sync_playwright
           import json, time
-
-          API = 'https://www.webnovel.com/apiajax/chapter/GetChapterList?bookId=7996858406002505'
 
           with sync_playwright() as p:
               browser = p.chromium.launch(headless=True,
@@ -26,29 +24,44 @@ jobs:
                   user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
                   viewport={'width': 1440, 'height': 900}, locale='en-US')
               page = ctx.new_page()
-              resp = page.goto(API, timeout=90000)
-              print('STATUS:', resp.status, flush=True)
-              print('HEADERS_CT:', resp.headers.get('content-type'), flush=True)
-              time.sleep(6)
-              body = page.evaluate('() => document.body ? document.body.innerText.slice(0,80) : ""')
-              # 等待挑战完成（点击 turnstile）
-              for i in range(15):
-                  if 'Just a moment' not in body and 'security verification' not in body and 'Verify you are' not in body:
+              reqs = []
+              page.on('request', lambda r: reqs.append(r.method + ' ' + r.url) if r.resource_type in ('xhr', 'fetch') else None)
+              page.goto('https://www.webnovel.com/book/7996858406002505', timeout=90000)
+              for i in range(20):
+                  time.sleep(2)
+                  if 'Reverend' in page.title():
                       break
-                  for f in page.frames:
-                      if 'challenges.cloudflare.com' in f.url:
-                          try:
-                              box = f.frame_element().bounding_box()
-                              if box:
-                                  page.mouse.click(box['x'] + 30, box['y'] + box['height']/2)
-                                  time.sleep(4)
-                          except Exception:
-                              pass
-                  time.sleep(3)
-                  body = page.evaluate('() => document.body ? document.body.innerText.slice(0,80) : ""')
-              html = page.content()
-              print('FINAL_URL:', page.url, flush=True)
-              print('HTML_LEN:', len(html), flush=True)
-              print('HTML_HEAD:', html[:400].replace(chr(10), ' ')[:400], flush=True)
+              print('BOOK_TITLE:', page.title(), flush=True)
+              time.sleep(6)
+              seen = reqs[:]
+              print('BOOK_XHR:', json.dumps(seen[:15], ensure_ascii=False), flush=True)
+
+              # 找章节链接，进章节页
+              links = page.evaluate("""() => {
+                const as = [...document.querySelectorAll('a[href*="/book/7996858406002505/"]')];
+                return as.map(a => a.getAttribute('href')).filter(h => /\\/book\\/7996858406002505\\/\\d+/.test(h)).slice(0, 5);
+              }""")
+              print('CHAPTER_LINKS:', json.dumps(links), flush=True)
+              if links:
+                  reqs.clear()
+                  page.goto('https://www.webnovel.com' + links[0] if links[0].startswith('/') else links[0], timeout=90000)
+                  for i in range(25):
+                      time.sleep(3)
+                      t = page.title()
+                      if 'Just a moment' not in t and t:
+                          break
+                      for f in page.frames:
+                          if 'challenges.cloudflare.com' in f.url:
+                              try:
+                                  box = f.frame_element().bounding_box()
+                                  if box:
+                                      page.mouse.click(box['x'] + 30, box['y'] + box['height']/2)
+                                      time.sleep(4)
+                              except Exception:
+                                  pass
+                  print('CHAPTER_TITLE:', page.title(), flush=True)
+                  time.sleep(8)
+                  interesting = [u for u in reqs if 'comment' in u.lower() or 'review' in u.lower() or 'chapter' in u.lower() or 'api' in u.lower()]
+                  print('CHAPTER_XHR:', json.dumps(interesting[:20], ensure_ascii=False), flush=True)
               browser.close()
           PYEOF
