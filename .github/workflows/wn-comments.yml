@@ -80,31 +80,59 @@ jobs:
                       time.sleep(5 + att * 3)
                   return None
 
-              # 章节列表
-              chapters = []
-              pi = 0
-              while True:
-                  j = api_retry(f'https://www.webnovel.com/go/pcm/chapter/get-chapter-list?bookId={BOOK}&pageIndex={pi}&encryptType=1')
-                  if not j:
-                      print('CHLIST_BLOCKED at page', pi, flush=True)
+              # 章节列表（接口加密，用官方 Fock 库在页面内解密）
+              chapters = None
+              for att in range(4):
+                  chres = page.evaluate("""async (bookId) => {
+                      try {
+                          if (!window.Fock) {
+                              await new Promise((res, rej) => {
+                                  const s = document.createElement('script');
+                                  s.src = 'https://www.yueimg.com/common/fock/2022090701/234892384923842.js';
+                                  s.onload = res; s.onerror = () => rej('fock load fail');
+                                  document.body.appendChild(s);
+                              });
+                          }
+                          const F = window.Fock;
+                          F.initialize();
+                          F.setupUserKey('antipirate');
+                          const res = await fetch('/go/pcm/chapter/get-chapter-list?bookId='+bookId+'&pageIndex=0&encryptType=1', {headers:{'Accept':'application/json'}});
+                          const txt = await res.text();
+                          let j = null; try { j = JSON.parse(txt); } catch(e) {}
+                          if (!j) return {err: 'notjson', head: txt.slice(0,60)};
+                          if (j.code !== 0) return {err: 'code '+j.code};
+                          const d = j.data || {};
+                          if ((d.encryptType || d.actualEncryptType) === 1 && d.content) {
+                              F.addKeypool(d.encryptKeyPool, ''+d.encryptVersion);
+                              return await new Promise((res2) => {
+                                  F.unlock(d.content, bookId, function(e, out){
+                                      if (e === 0) { try { res2(JSON.parse(out)); } catch(err) { res2({err:'parse'}); } }
+                                      else res2({err:'unlock '+e});
+                                  });
+                              });
+                          }
+                          return d;
+                      } catch(ex) { return {err: String(ex).slice(0,100)}; }
+                  }""", BOOK)
+                  if chres and 'err' not in chres:
                       break
-                  d = j.get('data') or {}
-                  items = d.get('chapterItems') or []
-                  if pi == 0 and items:
-                      print('ITEM_KEYS:', list(items[0].keys()), flush=True)
-                      print('FIRST_ITEM:', json.dumps(items[0], ensure_ascii=False)[:300], flush=True)
-                  if not items:
-                      break
-                  chapters.extend(items)
-                  total = d.get('chapterTotal') or 0
-                  print(f'CHLIST page {pi}: +{len(items)} total={len(chapters)}/{total}', flush=True)
-                  if len(chapters) >= total:
-                      break
-                  pi += 1
-                  time.sleep(random.uniform(0.4, 0.8))
+                  print('CHLIST_ATT', att, chres, flush=True)
+                  warmup()
+                  time.sleep(5 + att * 3)
+              if chres and 'err' not in chres:
+                  vols = chres.get('volumeItems') or []
+                  chapters = []
+                  for v in vols:
+                      for c in (v.get('chapters') or v.get('chapterItems') or []):
+                          chapters.append({'id': c.get('id') or c.get('chapterId'), 'name': c.get('name') or c.get('chapterName') or ''})
+                  chapters = [c for c in chapters if c['id']]
+                  if chapters:
+                      print('FIRST_CH:', json.dumps(chapters[0], ensure_ascii=False), flush=True)
+                      print('LAST_CH:', json.dumps(chapters[-1], ensure_ascii=False), flush=True)
 
               print('TOTAL_CHAPTERS:', len(chapters), flush=True)
               if not chapters:
+                  chapters = []
                   result['blockedAt'] = START
                   with open('comments.json', 'w', encoding='utf-8') as f:
                       json.dump(result, f, ensure_ascii=False)
