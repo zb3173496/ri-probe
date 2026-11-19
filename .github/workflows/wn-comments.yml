@@ -1,0 +1,152 @@
+name: wn-comments
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: '起始章节序号'
+        required: true
+        default: '0'
+      count:
+        description: '本批章节数'
+        required: true
+        default: '30'
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install playwright
+        run: |
+          pip install playwright
+          playwright install chromium --with-deps
+      - name: scrape chapter comments
+        run: |
+          python3 - << 'PYEOF'
+          from playwright.sync_api import sync_playwright
+          import json, time, random, os
+
+          BOOK = '7996858406002505'
+          START = int(os.environ.get('START', '0'))
+          COUNT = int(os.environ.get('COUNT', '30'))
+          result = {'bookId': BOOK, 'start': START, 'chapters': {}, 'blockedAt': None, 'reqs': 0}
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True,
+                  args=['--disable-blink-features=AutomationControlled'])
+              ctx = browser.new_context(
+                  user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                  viewport={'width': 1440, 'height': 900}, locale='en-US')
+              page = ctx.new_page()
+              page.goto(f'https://www.webnovel.com/book/{BOOK}', timeout=90000)
+              for i in range(30):
+                  time.sleep(2)
+                  if 'Reverend' in page.title():
+                      break
+              print('BOOK_TITLE:', page.title(), flush=True)
+
+              def api(url):
+                  """返回 dict 或 None"""
+                  result['reqs'] += 1
+                  try:
+                      return page.evaluate("""async (u) => {
+                          const res = await fetch(u, {headers:{'Accept':'application/json'}});
+                          const txt = await res.text();
+                          let j=null; try{j=JSON.parse(txt)}catch(e){}
+                          return {status: res.status, json: j};
+                      }""", url)
+                  except Exception:
+                      return None
+
+              def api_retry(url, tries=8):
+                  """带页面刷新重试"""
+                  for att in range(tries):
+                      r = api(url)
+                      if r and r['json'] is not None and r['json'].get('code') == 0:
+                          return r['json']
+                      print(f'  retry {att}:', r['status'] if r else 'err', flush=True)
+                      time.sleep(6 + att * 2)
+                      if att % 3 == 2:
+                          try:
+                              page.reload(timeout=60000)
+                              time.sleep(8)
+                          except Exception:
+                              pass
+                  return None
+
+              # 章节列表
+              chapters = []
+              pi = 0
+              while True:
+                  j = api_retry(f'https://www.webnovel.com/go/pcm/chapter/get-chapter-list?bookId={BOOK}&pageIndex={pi}&encryptType=1')
+                  if not j:
+                      print('CHLIST_BLOCKED at page', pi, flush=True)
+                      break
+                  d = j.get('data') or {}
+                  items = d.get('chapterItems') or []
+                  if pi == 0 and items:
+                      print('ITEM_KEYS:', list(items[0].keys()), flush=True)
+                      print('FIRST_ITEM:', json.dumps(items[0], ensure_ascii=False)[:300], flush=True)
+                  if not items:
+                      break
+                  chapters.extend(items)
+                  total = d.get('chapterTotal') or 0
+                  print(f'CHLIST page {pi}: +{len(items)} total={len(chapters)}/{total}', flush=True)
+                  if len(chapters) >= total:
+                      break
+                  pi += 1
+                  time.sleep(random.uniform(0.4, 0.8))
+
+              print('TOTAL_CHAPTERS:', len(chapters), flush=True)
+              if not chapters:
+                  result['blockedAt'] = START
+                  with open('comments.json', 'w', encoding='utf-8') as f:
+                      json.dump(result, f, ensure_ascii=False)
+                  raise SystemExit('no chapters, orchestrator will retry')
+
+              batch = chapters[START:START + COUNT]
+              for idx, ch in enumerate(batch):
+                  cid = str(ch.get('id') or ch.get('chapterId'))
+                  cname = ch.get('name') or ch.get('chapterName') or ''
+                  reviews = []
+                  ok = True
+                  for pg in (1, 2):
+                      j = api_retry(f'https://www.webnovel.com/go/pcm/chapterReview/getReviewList?bookId={BOOK}&chapterId={cid}&lastReviewId=0&orderType=1&pageIndex={pg}', tries=5)
+                      if not j:
+                          ok = False
+                          break
+                      items = (j.get('data') or {}).get('chapterReviewItems') or []
+                      for it in items:
+                          reviews.append([it.get('content', ''), it.get('userName', ''),
+                                          it.get('likeAmount', 0), it.get('createTimeFormat', ''),
+                                          it.get('replyAmount', 0)])
+                      if len(items) < 10:
+                          break
+                      time.sleep(random.uniform(0.3, 0.6))
+                  if not ok:
+                      result['blockedAt'] = START + idx
+                      print('BLOCKED_AT:', START + idx, flush=True)
+                      break
+                  result['chapters'][cid] = {'name': cname, 'reviews': reviews}
+                  done = idx + 1
+                  if done % 5 == 0 or done == len(batch):
+                      print(f'PROGRESS: {done}/{len(batch)} reqs={result["reqs"]} reviews={sum(len(v["reviews"]) for v in result["chapters"].values())}', flush=True)
+                  time.sleep(random.uniform(0.3, 0.7))
+
+              browser.close()
+
+          result['nextStart'] = result['blockedAt'] if result['blockedAt'] is not None else START + len(batch)
+          with open('comments.json', 'w', encoding='utf-8') as f:
+              json.dump(result, f, ensure_ascii=False)
+          print(f"SUMMARY: done={len(result['chapters'])} nextStart={result['nextStart']} reqs={result['reqs']}", flush=True)
+          PYEOF
+        env:
+          START: ${{ github.event.inputs.start }}
+          COUNT: ${{ github.event.inputs.count }}
+      - name: upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wn-comments-${{ github.event.inputs.start }}
+          path: comments.json
