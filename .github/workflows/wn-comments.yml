@@ -59,20 +59,25 @@ jobs:
                   except Exception:
                       return None
 
-              def api_retry(url, tries=8):
-                  """带页面刷新重试"""
+              WARM = [
+                  f'https://www.webnovel.com/go/pcm/gift/get-gift-info?bookId={BOOK}&novelType=0',
+                  f'https://www.webnovel.com/go/pcm/powerStone/getRankInfoAjax?bookId={BOOK}&bookType=1&novelType=0',
+                  'https://www.webnovel.com/go/pcm/pcbookcity/essay',
+              ]
+              def warmup():
+                  for w in WARM:
+                      api(w)
+                      time.sleep(random.uniform(0.3, 0.7))
+
+              def api_retry(url, tries=4):
+                  """403 时先用安全接口热身，再重试；都不行快速放弃"""
                   for att in range(tries):
                       r = api(url)
                       if r and r['json'] is not None and r['json'].get('code') == 0:
                           return r['json']
                       print(f'  retry {att}:', r['status'] if r else 'err', flush=True)
-                      time.sleep(6 + att * 2)
-                      if att % 3 == 2:
-                          try:
-                              page.reload(timeout=60000)
-                              time.sleep(8)
-                          except Exception:
-                              pass
+                      warmup()
+                      time.sleep(5 + att * 3)
                   return None
 
               # 章节列表
@@ -112,7 +117,7 @@ jobs:
                   reviews = []
                   ok = True
                   for pg in (1, 2):
-                      j = api_retry(f'https://www.webnovel.com/go/pcm/chapterReview/getReviewList?bookId={BOOK}&chapterId={cid}&lastReviewId=0&orderType=1&pageIndex={pg}', tries=5)
+                      j = api_retry(f'https://www.webnovel.com/go/pcm/chapterReview/getReviewList?bookId={BOOK}&chapterId={cid}&lastReviewId=0&orderType=1&pageIndex={pg}', tries=4)
                       if not j:
                           ok = False
                           break
