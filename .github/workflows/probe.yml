@@ -4,6 +4,14 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
+      - name: plain curl test
+        run: |
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+          echo "--- curl getReviewList:"
+          curl -s --max-time 25 -A "$UA" -H "Accept: application/json" -H "Referer: https://www.webnovel.com/book/7996858406002505" -w "STATUS:%{http_code}" "https://www.webnovel.com/go/pcm/chapterReview/getReviewList?bookId=7996858406002505&chapterId=21533585005668024&lastReviewId=0&orderType=1&pageIndex=1" | head -c 400
+          echo
+          echo "--- curl get-chapter-list:"
+          curl -s --max-time 25 -A "$UA" -H "Accept: application/json" -H "Referer: https://www.webnovel.com/book/7996858406002505" -w "STATUS:%{http_code}" "https://www.webnovel.com/go/pcm/chapter/get-chapter-list?bookId=7996858406002505&pageIndex=0&encryptType=1" | head -c 300
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -11,24 +19,11 @@ jobs:
         run: |
           pip install playwright
           playwright install chromium --with-deps
-      - name: plain curl test
-        run: |
-          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-          echo "--- curl getReviewList:"
-          curl -s --max-time 25 -A "$UA" -H "Accept: application/json" -H "Referer: https://www.webnovel.com/book/7996858406002505" -w "
-status: %{http_code}
-" "https://www.webnovel.com/go/pcm/chapterReview/getReviewList?bookId=7996858406002505&chapterId=21533585005668024&lastReviewId=0&orderType=1&pageIndex=1" | head -c 400
-          echo
-          echo "--- curl get-chapter-list:"
-          curl -s --max-time 25 -A "$UA" -H "Accept: application/json" -H "Referer: https://www.webnovel.com/book/7996858406002505" -w "
-status: %{http_code}
-" "https://www.webnovel.com/go/pcm/chapter/get-chapter-list?bookId=7996858406002505&pageIndex=0&encryptType=1" | head -c 300
-      - name: test go/pcm endpoints
+      - name: chapter list structure
         run: |
           python3 - << 'PYEOF'
           from playwright.sync_api import sync_playwright
           import json, time
-
           with sync_playwright() as p:
               browser = p.chromium.launch(headless=True,
                   args=['--disable-blink-features=AutomationControlled'])
@@ -43,30 +38,11 @@ status: %{http_code}
                       break
               print('BOOK_TITLE:', page.title(), flush=True)
               time.sleep(4)
-
-              def api(url):
-                  r = page.evaluate("""async (u) => {
-                      const res = await fetch(u, {headers:{'Accept':'application/json'}});
-                      const txt = await res.text();
-                      return {status: res.status, head: txt.slice(0,180)};
-                  }""", url)
-                  print('API', url.split('?')[0][-45:], '=>', r['status'], r['head'][:120].replace('\n',' '), flush=True)
-                  return r
-
-              # 打印完整章节列表 JSON 看加密字段
-              r = api('https://www.webnovel.com/go/pcm/chapter/get-chapter-list?bookId=7996858406002505&pageIndex=0&encryptType=1')
-              print('CHLIST_FULL:', r['head'], flush=True)
               r2 = page.evaluate("""async () => {
                   const res = await fetch('https://www.webnovel.com/go/pcm/chapter/get-chapter-list?bookId=7996858406002505&pageIndex=0&encryptType=1', {headers:{'Accept':'application/json'}});
                   const j = await res.json();
                   return {keys: Object.keys(j.data||{}), itemKeys: j.data && j.data.chapterItems ? Object.keys(j.data.chapterItems[0]||{}) : [], first: j.data && j.data.chapterItems ? j.data.chapterItems[0] : null, total: j.data ? j.data.chapterTotal : null};
               }""")
-              print('CHLIST_STRUCT:', json.dumps(r2, ensure_ascii=False)[:600], flush=True)
-              api('https://www.webnovel.com/go/pcm/chapterReview/getReviewList?bookId=7996858406002505&chapterId=21533585005668024&lastReviewId=0&orderType=1&pageIndex=1')
-              nav = page.goto('https://www.webnovel.com/go/pcm/chapterReview/getReviewList?bookId=7996858406002505&chapterId=21533585005668024&lastReviewId=0&orderType=1&pageIndex=1', timeout=60000)
-              print('NAV_STATUS:', nav.status, flush=True)
-              time.sleep(8)
-              body = page.evaluate('() => { const p = document.querySelector("pre"); return p ? p.textContent.slice(0,250) : document.body.innerText.slice(0,120); }')
-              print('NAV_BODY:', body[:200].replace('\n',' '), flush=True)
+              print('CHLIST_STRUCT:', json.dumps(r2, ensure_ascii=False)[:700], flush=True)
               browser.close()
           PYEOF
