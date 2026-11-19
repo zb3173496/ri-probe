@@ -1,0 +1,19 @@
+name: probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe webnovel
+        run: |
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+          echo "== 书页拿cookie =="
+          curl -s -c ck.txt -A "$UA" "https://www.webnovel.com/book/7996858406002505" -o /dev/null -w "%{http_code}\n"
+          cat ck.txt | grep -v "^#" | awk '{print $6}' | head
+          TOKEN=$(grep "_csrfToken" ck.txt | awk '{print $7}')
+          echo "csrf: ${TOKEN:0:10}"
+          echo "== 章节列表候选 =="
+          for u in \
+            "https://www.webnovel.com/apiajax/chapter/GetChapterList?bookId=7996858406002505&_csrfToken=$TOKEN" \
+            "https://www.webnovel.com/go/pcm/book/getChapterList?bookId=7996858406002505" \
+            ; do echo "-- $u"; curl -s -b ck.txt -A "$UA" "$u" | head -c 300; echo; done
