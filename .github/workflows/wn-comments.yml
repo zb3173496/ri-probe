@@ -30,7 +30,7 @@ jobs:
         run: |
           python3 - << 'PYEOF'
           from playwright.sync_api import sync_playwright
-          import json, time, random, os
+          import json, time, random, os, re
 
           BOOK = '7996858406002505'
           START = int(os.environ.get('START', '0'))
@@ -100,69 +100,25 @@ jobs:
                       time.sleep(5 + att * 3)
                   return None
 
-              # 章节列表（优先用仓库缓存，否则 API+Fock 解密）
+              # 章节列表：直接扒书籍页 DOM（含全部章节链接，绕开被封的 get-chapter-list）
               chapters = None
-              import os.path
-              if os.path.exists('chapters.json'):
-                  chapters = json.load(open('chapters.json'))
-                  print('CHLIST_CACHE_HIT:', len(chapters), flush=True)
-              for att in range(12):
-                  chres = page.evaluate("""async (bookId) => {
-                      try {
-                          if (!window.Fock) {
-                              await new Promise((res, rej) => {
-                                  const s = document.createElement('script');
-                                  s.src = 'https://www.yueimg.com/common/fock/2022090701/234892384923842.js';
-                                  s.onload = res; s.onerror = () => rej('fock load fail');
-                                  document.body.appendChild(s);
-                              });
-                          }
-                          const F = window.Fock;
-                          F.initialize();
-                          F.setupUserKey('antipirate');
-                          const res = await fetch('/go/pcm/chapter/get-chapter-list?bookId='+bookId+'&pageIndex=0&encryptType=1', {headers:{'Accept':'application/json'}});
-                          const txt = await res.text();
-                          let j = null; try { j = JSON.parse(txt); } catch(e) {}
-                          if (!j) return {err: 'notjson', head: txt.slice(0,60)};
-                          if (j.code !== 0) return {err: 'code '+j.code};
-                          const d = j.data || {};
-                          if ((d.encryptType || d.actualEncryptType) === 1 && d.content) {
-                              F.addKeypool(d.encryptKeyPool, ''+d.encryptVersion);
-                              return await new Promise((res2) => {
-                                  F.unlock(d.content, bookId, function(e, out){
-                                      if (e === 0) { try { res2(JSON.parse(out)); } catch(err) { res2({err:'parse'}); } }
-                                      else res2({err:'unlock '+e});
-                                  });
-                              });
-                          }
-                          return d;
-                      } catch(ex) { return {err: String(ex).slice(0,100)}; }
-                  }""", BOOK)
-                  if chres and 'err' not in chres:
-                      break
-                  print('CHLIST_ATT', att, chres, flush=True)
-                  for f in page.frames:
-                      if 'challenges.cloudflare.com' in f.url:
-                          try:
-                              box = f.frame_element().bounding_box()
-                              if box:
-                                  page.mouse.click(box['x'] + 30, box['y'] + box['height']/2)
-                                  time.sleep(4)
-                          except Exception:
-                              pass
-                  warmup()
-                  time.sleep(5 + att)
-              if chres and 'err' not in chres:
-                  vols = chres.get('volumeItems') or []
-                  chapters = []
-                  for v in vols:
-                      for c in (v.get('chapters') or v.get('chapterItems') or []):
-                          chapters.append({'id': c.get('id') or c.get('chapterId'), 'name': c.get('name') or c.get('chapterName') or ''})
-                  chapters = [c for c in chapters if c['id']]
-                  if chapters:
-                      print('FIRST_CH:', json.dumps(chapters[0], ensure_ascii=False), flush=True)
-                      print('LAST_CH:', json.dumps(chapters[-1], ensure_ascii=False), flush=True)
-
+              links = page.evaluate("""() => [...document.querySelectorAll('a')].map(a => ({href: a.getAttribute('href')||'', text: (a.textContent||'').trim()})).filter(x => /\\/book\\/7996858406002505\\/\\d+/.test(x.href))""")
+              seen = {}
+              chapters = []
+              for x in links:
+                  m = re.search(r'/book/7996858406002505/(\d+)', x['href'])
+                  if not m:
+                      continue
+                  cid = m.group(1)
+                  if cid not in seen:
+                      seen[cid] = len(chapters)
+                      chapters.append({'id': cid, 'name': x['text']})
+                  elif x['text'] and not chapters[seen[cid]]['name']:
+                      chapters[seen[cid]]['name'] = x['text']
+              print('DOM_CHAPTERS:', len(chapters), flush=True)
+              if chapters:
+                  print('FIRST_CH:', json.dumps(chapters[0], ensure_ascii=False)[:120], flush=True)
+                  print('LAST_CH:', json.dumps(chapters[-1], ensure_ascii=False)[:120], flush=True)
               print('TOTAL_CHAPTERS:', len(chapters), flush=True)
               if not chapters:
                   chapters = []
