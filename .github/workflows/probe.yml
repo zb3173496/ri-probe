@@ -4,20 +4,66 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: search engines chapter urls
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install playwright
         run: |
-          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-          echo "=== DDG:"
-          for p in 0 1 2; do
-            curl -sL --max-time 25 -A "$UA" "https://html.duckduckgo.com/html/?q=site%3Awebnovel.com%2Fbook%2F7996858406002505&s=$((p*30))" -o /tmp/ddg$p.html
-            sleep 2
-          done
-          grep -hoE 'book/7996858406002505/[0-9]+' /tmp/ddg*.html | sort -u | wc -l
-          grep -hoE 'book/7996858406002505/[0-9]+' /tmp/ddg*.html | sort -u | head -8
-          echo "=== Bing:"
-          for p in 1 31 61; do
-            curl -sL --max-time 25 -A "$UA" "https://www.bing.com/search?q=site%3Awebnovel.com%2Fbook%2F7996858406002505&count=30&first=$p" -o /tmp/bing$p.html
-            sleep 2
-          done
-          grep -hoE 'book/7996858406002505/[0-9]+' /tmp/bing*.html | sort -u | wc -l
-          grep -hoE 'book/7996858406002505/[0-9]+' /tmp/bing*.html | sort -u | head -8
+          pip install playwright
+          playwright install chromium --with-deps
+      - name: catalog page + reviewlist test
+        run: |
+          python3 - << 'PYEOF'
+          from playwright.sync_api import sync_playwright
+          import json, time, re
+
+          def click_pass(page, rounds=25):
+              for i in range(rounds):
+                  time.sleep(3)
+                  t = page.title()
+                  if t and 'Just a moment' not in t and 'Attention' not in t:
+                      return t
+                  for f in page.frames:
+                      if 'challenges.cloudflare.com' in f.url:
+                          try:
+                              box = f.frame_element().bounding_box()
+                              if box:
+                                  page.mouse.move(box['x'] + 70, box['y'] + box['height']/2, steps=6)
+                                  page.mouse.move(box['x'] + 30, box['y'] + box['height']/2, steps=5)
+                                  page.mouse.down(); time.sleep(0.07); page.mouse.up()
+                                  time.sleep(4)
+                          except Exception:
+                              pass
+              return page.title()
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True,
+                  args=['--disable-blink-features=AutomationControlled'])
+              ctx = browser.new_context(
+                  user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                  viewport={'width': 1440, 'height': 900}, locale='en-US')
+              page = ctx.new_page()
+              page.goto('https://www.webnovel.com/book/7996858406002505', timeout=90000)
+              t = click_pass(page)
+              print('BOOK_TITLE:', t, flush=True)
+              time.sleep(4)
+              # 1) 书籍页 DOM 里的章节链接
+              links = page.evaluate("""() => [...document.querySelectorAll('a')].map(a => a.getAttribute('href')).filter(h => h && /\\/book\\/7996858406002505\\/\\d+/.test(h))""")
+              print('BOOK_DOM_LINKS:', len(links), links[:6], flush=True)
+              # 2) 目录页
+              page.goto('https://www.webnovel.com/book/7996858406002505/catalog', timeout=90000)
+              t2 = click_pass(page)
+              print('CATALOG_TITLE:', t2, flush=True)
+              time.sleep(6)
+              clinks = page.evaluate("""() => [...document.querySelectorAll('a')].map(a => a.getAttribute('href')).filter(h => h && /\\/book\\/7996858406002505\\/\\d+/.test(h))""")
+              print('CATALOG_LINKS:', len(clinks), clinks[:6], flush=True)
+              # 3) reviewList 现状
+              r = page.evaluate("""async () => {
+                  const res = await fetch('/go/pcm/chapterReview/getReviewList?bookId=7996858406002505&chapterId=21533585005668024&lastReviewId=0&orderType=1&pageIndex=1', {headers:{'Accept':'application/json'}});
+                  const txt = await res.text();
+                  let j=null; try{j=JSON.parse(txt)}catch(e){}
+                  return {status: res.status, isJson: !!j, head: txt.slice(0,100)};
+              }""")
+              print('REVIEWLIST_NOW:', json.dumps(r, ensure_ascii=False)[:250], flush=True)
+              browser.close()
+          PYEOF
